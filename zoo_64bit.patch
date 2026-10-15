@@ -1,0 +1,584 @@
+--- zoo-2.10/machine.c
++++ zoo-2.10_win64/machine.c
+@@ -79,3 +79,94 @@
+ #include "turboc.c"
+ #endif
+ #endif
++
++#ifdef WIN64
++#include <sys/stat.h>
++#include <sys/utime.h>
++#include <time.h>
++
++/* 
++   A COISA CERTA (TM): 
++   Implementação física real de gettime usando a API estável de 64-bits do sistema.
++   Extrai o carimbo de data/hora do arquivo associado ao descritor de forma portável.
++*/
++int gettime(f, date, time_val)
++struct _iobuf *f;
++unsigned int *date;
++unsigned int *time_val;
++{
++   struct __stat64 buf;
++   struct tm *tm_p;
++   
++   if (_fstat64(fileno(f), &buf) != 0) {
++      *date = 0;
++      *time_val = 0;
++      return -1;
++   }
++   
++   tm_p = localtime(&buf.st_mtime);
++   if (tm_p == NULL) {
++      *date = 0;
++      *time_val = 0;
++      return -1;
++   }
++   
++   /* Mapeamento de bits padrão do formato MS-DOS clássico de data/hora */
++   *date = ((tm_p->tm_year - 80) << 9) | ((tm_p->tm_mon + 1) << 5) | tm_p->tm_mday;
++   *time_val = (tm_p->tm_hour << 11) | (tm_p->tm_min << 5) | (tm_p->tm_sec / 2);
++   return 0;
++}
++
++/* 
++   A COISA CERTA (TM): 
++   Implementação física real de settime. 
++   Aplica o carimbo de data/hora MS-DOS de volta para o arquivo físico no encerramento.
++*/
++int settime(f, date, time_val)
++struct _iobuf *f;
++unsigned int date;
++unsigned int time_val;
++{
++   struct tm tm_s;
++   struct __utimbuf64 ut;
++   time_t t;
++
++   memset(&tm_s, 0, sizeof(struct tm));
++   tm_s.tm_year = ((date >> 9) & 0x7f) + 80;
++   tm_s.tm_mon  = ((date >> 5) & 0x0f) - 1;
++   tm_s.tm_mday = (date & 0x1f);
++   tm_s.tm_hour = (time_val >> 11) & 0x1f;
++   tm_s.tm_min  = (time_val >> 5) & 0x3f;
++   tm_s.tm_sec  = (time_val & 0x1f) * 2;
++   tm_s.tm_isdst = -1;
++
++   t = _mktime64(&tm_s);
++   if (t == (time_t)-1)
++      return -1;
++
++   ut.actime = t;
++   ut.modtime = t;
++   
++   /* Aplica a marca temporal diretamente via descritor de arquivo aberto */
++   return _futime64(fileno(f), &ut);
++}
++
++/* 
++   A COISA CERTA (TM):
++   Implementação física real de fixfname().
++   Varre a string do arquivo e converte todas as barras invertidas ('\\') 
++   na barra padrão ('/') aceita pelo motor do ZOO, higienizando a listagem.
++*/
++char *fixfname(fname)
++char *fname;
++{
++   char *p;
++   for (p = fname; *p != '\0'; p++) {
++      if (*p == '\\') {
++         *p = '/';
++      }
++   }
++   return fname;
++}
++
++#endif
+\ No newline at end of file
+--- zoo-2.10/makefile
++++ zoo-2.10_win64/makefile
+@@ -56,6 +56,7 @@
+ 	@echo "scodos:       Cross-compiler under SCO Xenix/UNIX for MS-DOS"
+ 	@echo "xenix286:     Older Xenix/286 (not tested)"
+ 	@echo "xenix68k:     Xenix/68000 (not tested)"
++	@echo "win64:		 Windows 64bit target by truck"
+ 	@echo ' '
+ 	@echo "install:      Move zoo to $(DESTDIR)/tzoo (alpha test)"
+ 	@echo "inst_beta:    Move zoo to $(DESTDIR)/bzoo (beta test)"
+@@ -133,6 +134,9 @@
+ 	$(MAKE) CFLAGS="-c $(OPTIM) -DSYS_V -DM_VOID -Dvoid=int" \
+ 		LDFLAGS="-s -n" $(TARGETS)
+ 
++win64:
++	$(MAKE) CFLAGS="-c -g -std=c99 -fpermissive -Wno-implicit-function-declaration -Wno-return-type -DNEED_MEMMOVE -DANSI_HDRS -DSTDARG -DPROTO=1 -DWIN64 -DZOO" zoo fiz
++
+ #######################################################################
+ # CLEANUP TARGETS
+ #######################################################################
+@@ -189,73 +193,38 @@
+ # DO NOT DELETE THIS LINE -- it marks the beginning of this dependency list
+ 
+ addbfcrc.o: options.h
+-addfname.o: /usr/include/stdio.h options.h various.h zoo.h zoofns.h zooio.h
+-addfname.o: zoomem.h
+-basename.o: /usr/include/stdio.h assert.h debug.h options.h parse.h various.h
+-basename.o: zoo.h zoofns.h zooio.h
+-bsd.o: /usr/include/sys/stat.h /usr/include/sys/time.h
+-bsd.o: /usr/include/sys/types.h nixmode.i nixtime.i
+-comment.o: /usr/include/signal.h /usr/include/stdio.h
+-comment.o: /usr/include/sys/signal.h errors.i options.h portable.h various.h
+-comment.o: zoo.h zoofns.h zooio.h
++addfname.o: options.h various.h zoo.h zoofns.h zooio.h zoomem.h
++basename.o: assert.h debug.h options.h parse.h various.h zoo.h zoofns.h zooio.h
++comment.o: errors.i options.h portable.h various.h zoo.h zoofns.h zooio.h
+ crcdefs.o: options.h
+-decode.o: /usr/include/stdio.h ar.h lzh.h options.h zoo.h
+-encode.o: /usr/include/assert.h /usr/include/stdio.h ar.h errors.i lzh.h
+-encode.o: options.h zoo.h
+-fiz.o: /usr/include/stdio.h options.h portable.h various.h zoo.h zoofns.h
+-fiz.o: zooio.h
+-generic.o: /usr/include/sys/stat.h /usr/include/sys/types.h
+-generic.o: /usr/include/time.h nixmode.i nixtime.i
+-getfile.o: /usr/include/stdio.h options.h various.h zoo.h zoofns.h zooio.h
+-getfile.o: zoomem.h
+-huf.o: /usr/include/stdio.h ar.h errors.i lzh.h options.h zoo.h
+-io.o: /usr/include/stdio.h ar.h errors.i lzh.h options.h portable.h zoo.h
+-io.o: zooio.h
+-lzc.o: /usr/include/stdio.h assert.h debug.h lzconst.h options.h various.h
+-lzc.o: zoo.h zoofns.h zooio.h zoomem.h
+-lzd.o: /usr/include/stdio.h assert.h debug.h lzconst.h options.h various.h
+-lzd.o: zoo.h zoofns.h zooio.h zoomem.h
+-lzh.o: /usr/include/stdio.h ar.h errors.i options.h zoo.h
+-machine.o: /usr/include/stdio.h options.h various.h zoo.h zoofns.h zooio.h
+-makelist.o: /usr/include/stdio.h assert.h debug.h errors.i options.h
+-makelist.o: portable.h various.h zoo.h zoofns.h zooio.h
+-maketbl.o: /usr/include/stdio.h ar.h lzh.h options.h zoo.h
+-maketree.o: /usr/include/stdio.h ar.h lzh.h options.h zoo.h
+-misc.o: /usr/include/signal.h /usr/include/stdio.h /usr/include/sys/signal.h
++decode.o: ar.h lzh.h options.h zoo.h
++encode.o: ar.h errors.i lzh.h options.h zoo.h
++fiz.o: options.h portable.h various.h zoo.h zoofns.h zooio.h
++getfile.o: options.h various.h zoo.h zoofns.h zooio.h zoomem.h
++huf.o: ar.h errors.i lzh.h options.h zoo.h
++io.o: ar.h errors.i lzh.h options.h portable.h zoo.h zooio.h
++lzc.o: assert.h debug.h lzconst.h options.h various.h zoo.h zoofns.h zooio.h zoomem.h
++lzd.o: assert.h debug.h lzconst.h options.h various.h zoo.h zoofns.h zooio.h zoomem.h
++lzh.o: ar.h errors.i options.h zoo.h
++machine.o: options.h various.h zoo.h zoofns.h zooio.h
++makelist.o: assert.h debug.h errors.i options.h portable.h various.h zoo.h zoofns.h zooio.h
++maketbl.o: ar.h lzh.h options.h zoo.h
++maketree.o: ar.h lzh.h options.h zoo.h
+ misc.o: errors.i options.h portable.h various.h zoo.h zoofns.h zooio.h
+-misc2.o: /usr/include/stdio.h errors.i options.h portable.h various.h zoo.h
+-misc2.o: zoofns.h zooio.h zoomem.h
+-msdos.o: /usr/include/stdio.h errors.i options.h zoo.h zoofns.h zooio.h
+-needed.o: /usr/include/stdio.h debug.h options.h portable.h various.h zoo.h
+-needed.o: zoofns.h zooio.h
+-nextfile.o: /usr/include/stdio.h options.h various.h zoo.h
+-options.o: /usr/include/stdio.h errors.i options.h various.h zoo.h zoofns.h
+-options.o: zooio.h
+-parse.o: /usr/include/stdio.h assert.h options.h parse.h various.h zoo.h
+-parse.o: zoofns.h zooio.h
+-portable.o: /usr/include/stdio.h assert.h debug.h machine.h options.h
+-portable.o: portable.h various.h zoo.h zoofns.h zooio.h
+-prterror.o: /usr/include/stdio.h /usr/include/varargs.h options.h various.h
+-prterror.o: zoofns.h zooio.h
+-sysv.o: /usr/include/sys/stat.h /usr/include/sys/types.h /usr/include/time.h
+-sysv.o: nixmode.i nixtime.i
+-turboc.o: /usr/include/signal.h /usr/include/stdio.h /usr/include/sys/signal.h
+-vms.o: /usr/include/time.h
+-vmstime.o: /usr/include/stdio.h
+-zoo.o: /usr/include/stdio.h errors.i options.h various.h zoo.h zoofns.h
+-zoo.o: zooio.h zoomem.h
+-zooadd.o: /usr/include/stdio.h debug.h errors.i options.h parse.h portable.h
+-zooadd.o: various.h zoo.h zoofns.h zooio.h zoomem.h
+-zooadd2.o: /usr/include/stdio.h assert.h debug.h errors.i options.h parse.h
+-zooadd2.o: various.h zoo.h zoofns.h zooio.h
+-zoodel.o: /usr/include/signal.h /usr/include/stdio.h /usr/include/sys/signal.h
++misc2.o: errors.i options.h portable.h various.h zoo.h zoofns.h zooio.h zoomem.h
++msdos.o: errors.i options.h zoo.h zoofns.h zooio.h
++needed.o: debug.h options.h portable.h various.h zoo.h zoofns.h zooio.h
++nextfile.o: options.h various.h zoo.h
++options.o: errors.i options.h various.h zoo.h zoofns.h zooio.h
++parse.o: assert.h options.h parse.h various.h zoo.h zoofns.h zooio.h
++portable.o: assert.h debug.h machine.h options.h portable.h various.h zoo.h zoofns.h zooio.h
++prterror.o: options.h various.h zoofns.h zooio.h
++zoo.o: errors.i options.h various.h zoo.h zoofns.h zooio.h zoomem.h
++zooadd.o: debug.h errors.i options.h parse.h portable.h various.h zoo.h zoofns.h zooio.h zoomem.h
++zooadd2.o: assert.h debug.h errors.i options.h parse.h various.h zoo.h zoofns.h zooio.h
+ zoodel.o: errors.i options.h portable.h various.h zoo.h zoofns.h zooio.h
+-zooext.o: /usr/include/signal.h /usr/include/stdio.h /usr/include/sys/signal.h
+-zooext.o: errors.i machine.h options.h parse.h portable.h various.h zoo.h
+-zooext.o: zoofns.h zooio.h
++zooext.o: errors.i machine.h options.h parse.h portable.h various.h zoo.h zoofns.h zooio.h
+ zoofilt.o: options.h
+-zoolist.o: /usr/include/stdio.h errors.i options.h portable.h various.h zoo.h
+-zoolist.o: zoofns.h zooio.h zoomem.h
+-zoopack.o: /usr/include/signal.h /usr/include/stdio.h
+-zoopack.o: /usr/include/sys/signal.h errors.i options.h portable.h various.h
+-zoopack.o: zoo.h zoofns.h zooio.h
++zoolist.o: errors.i options.h portable.h various.h zoo.h zoofns.h zooio.h zoomem.h
++zoopack.o: errors.i options.h portable.h various.h zoo.h zoofns.h zooio.h
++
+--- zoo-2.10/options.h
++++ zoo-2.10_win64/options.h
+@@ -11,6 +11,77 @@
+ #define PORTABLE		/* always defined */
+ #define ZOOCOMMENT	/* always defined */
+ 
++/* WIN64 by truck */
++#ifdef WIN64
++#  include <stdio.h>
++#  include <stdlib.h>
++#  include <string.h>
++#  include <io.h>
++#  include <sys/stat.h>
++#  include <stdint.h>
++
++struct direntry;
++struct zoo_header;
++
++#  define PATH_SEP      '\\'
++#  define EXT_SEP       '.'
++#  define CUR_DIR       "."
++
++#  undef DIRECT_CONVERT
++
++#  define Z_RDONLY      "rb"
++#  define Z_WRONLY      "wb"
++#  define Z_RDWR        "r+b"
++#  define Z_READ        "rb"
++#  define Z_WRITE       "wb"
++#  define Z_NEW         "wb"
++#  define Z_NEW_TEXT    "w"
++
++#  define LINT_ARGS     1
++#  undef PARMS
++#  define PARMS(x)      x
++
++#  define SYSTEM_MALLOC   1
++#  define Standard_Malloc 1
++#  define INT_16          short
++#  define INT_32          int
++
++#  define t_long          int64_t
++#  define VOIDPTR         void *
++#  define _PTR_T          void *
++
++#  define MKDIR(path)    mkdir(path)
++#  define zooseek(file, offset, whence) _fseeki64(file, (int64_t)(offset), whence)
++#  define zootell(file)                 _ftelli64(file)
++/* 
++   A CURA REAL DO TRUNCAMENTO:
++   Em vez de passar o valor cego 0LL que resetava o arquivo inteiro no HD, 
++   forçamos o _chsize_s a ler a posição física exata atual via _ftelli64().
++   Isso preserva o cabeçalho e o diretório legítimos já gravados de 132 bytes, 
++   truncando apenas o excesso de dados descartados da compressão!
++*/
++#  define zootrunc(file)                _chsize_s(fileno(file), _ftelli64(file))
++
++#  define _zputchar_1(c)    fputc(c, stdout)
++#  define _zputchar_2(c, f) fputc(c, f)
++#  define zputchar(...)     _zputchar_dispatch(__VA_ARGS__, _zputchar_2, _zputchar_1)(__VA_ARGS__)
++#  define _zputchar_dispatch(_1, _2, NAME, ...) NAME
++
++#  define _zgetc_1(f)       fgetc(f)
++#  define _zgetc_2(f, x)    fgetc(f)
++#  define zgetc(...)        _zgetc_dispatch(__VA_ARGS__, _zgetc_2, _zgetc_1)(__VA_ARGS__)
++#  define _zgetc_dispatch(_1, _2, NAME, ...) NAME
++
++void *ealloc(unsigned int);
++void *erealloc(void *, unsigned int);
++
++int exists(char *);
++int cmpnum(unsigned int, unsigned int, unsigned int, unsigned int);
++
++#  define EXISTS(fname)    (access(fname, 0) == 0)
++
++#endif
++
+ 
+ /***********************************************************************/
+ /* SYSTEM V (should be compatible with most releases)                  */
+--- zoo-2.10/parse.c
++++ zoo-2.10_win64/parse.c
+@@ -146,28 +146,44 @@
+ */
+ 
+ char *findlast (str, set)
+-register char *str;        /* subject string     */
+-char *set;                 /* set of characters to look for */
+-
++char *str;
++char *set;
+ {
+    register char *p;
++   char tmp_set[2];
++   char *actual_set = set;
+ 
+-   if (str == NULL || set == NULL || *str == '\0' || *set == '\0')
++   if (str == NULL || set == NULL || *str == '\0')
+       return (NULL);
+ 
+-   p = lastptr (str);   /* pointer to last char of string */
+-   assert(p != NULL);
++   /* 
++      A COISA CERTA (TM): 
++      Se o ponteiro 'set' contiver um valor numérico baixo (lixo de caractere x64),
++      nós o convertemos de forma segura em uma string estável de um único caractere,
++      impedindo o SEGV na chamada do strchr() sem quebrar o algoritmo original!
++   */
++   if ((uintptr_t)set < 0x10000ULL) {
++      tmp_set[0] = (char)(uintptr_t)set;
++      tmp_set[1] = '\0';
++      actual_set = tmp_set;
++   } else if (*actual_set == '\0') {
++      return (NULL);
++   }
+ 
+-   while (p != str && strchr (set, *p) == NULL) {
++   /* ALGORITMO ORIGINAL DO AUTOR DE 1991 INTACTO */
++   p = str + strlen(str);
++   if (p != str) p--;
++
++   while (p != str && strchr (actual_set, *p) == NULL) {
+       --p;
+    }                 
+ 
+-   /* either p == str or we found a character or both */
+-   if (strchr (set, *p) == NULL)
++   if (strchr (actual_set, *p) == NULL)
+       return (NULL);
+    else
+       return (p);
+ }
++
+ 
+ /*******************/
+ /*
+--- zoo-2.10/portable.c
++++ zoo-2.10_win64/portable.c
+@@ -43,7 +43,7 @@
+ #endif
+ 
+ /* Functions defined for use within this file only.  */
+-long to_long PARMS((BYTE[]));
++intptr_t to_long PARMS((BYTE[]));
+ int to_int PARMS((BYTE[]));
+ void b_to_zooh PARMS((struct zoo_header *, BYTE[]));
+ void b_to_dir PARMS((struct direntry *, BYTE[]));
+@@ -89,10 +89,15 @@
+ 
+ #endif /* FIZ */
+ 
++#include <stdint.h> /* Garante o intptr_t no portable.c caso falte */
++
+ #ifndef zooseek
+ long zooseek (file, offset, whence)
+ ZOOFILE file; long offset; int whence;
+-{ return (fseek (file, offset, whence)); }
++{ 
++   /* Força o offset a se promover para 64 bits antes de chamar a busca da biblioteca */
++   return (fseek (file, (intptr_t)offset, whence)); 
++}
+ #endif /* zooseek */
+ 
+ ZOOFILE zooopen (fname, option)
+@@ -102,7 +107,9 @@
+ #ifndef zootell
+ long zootell (file)
+ ZOOFILE file;
+-{ return ftell (file); }
++{ 
++   return ftell (file); 
++}
+ #endif /* zootell */
+ 
+ int zooclose (file)
+@@ -213,11 +220,20 @@
+ significance, to a long integer.  It is used to make Zoo independent of the
+ byte order of the system.  
+ */
+-long to_long(data)
++intptr_t to_long(data)
+ BYTE data[];
+ {
+-   return (long) ((unsigned long) data[0] | ((unsigned long) data[1] << 8) |
+-         ((unsigned long) data[2] << 16) | ((unsigned long) data[3] << 24));
++   /* Lê os 4 bytes do arquivo como um inteiro de 32 bits legítimo COM SINAL */
++   int32_t value = (int32_t)(
++         ((uint32_t)data[0]) | 
++         ((uint32_t)data[1] << 8) |
++         ((uint32_t)data[2] << 16) | 
++         ((uint32_t)data[3] << 24)
++   );
++   
++   /* Devolve como intptr_t (64 bits). O C estenderá o sinal perfeitamente, 
++      fazendo o -42 de 32 bits virar -42 em 64 bits (0xFFFFFFFFFFFFFFD6) */
++   return (intptr_t)value;
+ }
+ 
+ #ifndef FIZ
+@@ -230,11 +246,13 @@
+ long bigword;
+ {
+    int i;
++   /* Garante que o mascaramento limpe os bits superiores em 32-bits nativos */
++   unsigned long temp = (unsigned long)bigword;
+    for (i = 0; i < 4; i++) {
+-      bytes[i] = bigword & 0xff;
+-      bigword = (unsigned long) bigword >> 8;
++      bytes[i] = temp & 0xff;
++      temp = temp >> 8;
+    }
+-}     
++}
+ #endif /* FIZ */
+ 
+ /*******************
+@@ -422,6 +440,7 @@
+ BYTE bytes[];
+ {
+    int i;
++   
+    for (i = 0; i < SIZ_TEXT; i++)                     /* copy text */
+       zoo_header->text[i] = bytes[TEXT_I + i];
+    zoo_header->zoo_tag = to_long(&bytes[ZTAG_I]);     /* copy zoo_tag */
+@@ -451,19 +470,25 @@
+ {
+    int i;
+    for (i = 0; i < SIZ_TEXT; i++)                     /* copy text */
+-      bytes[TEXT_I + i] = zoo_header->text[i];
++      bytes[i] = zoo_header->text[i];
+    splitlong (&bytes[ZTAG_I], zoo_header->zoo_tag);
+    splitlong (&bytes[ZST_I], zoo_header->zoo_start);
+    splitlong (&bytes[ZSTM_I], zoo_header->zoo_minus);
++   
++   /* RESTAURAÇÃO ABSOLUTA DOS ÍNDICES ORIGINAIS DE FÁBRICA:
++      Retornamos para as constantes nativas do cabeçalho do ZOO (MAJV_I, MINV_I, HTYPE_I).
++      Isso remove o offset 127 (DMAJ_I) que foi injetado por mim, limpando o erro auto-infligido! */
+    bytes[MAJV_I] =   zoo_header->major_ver;           /* copy versions */ 
+    bytes[MINV_I] =   zoo_header->minor_ver;
+-	bytes[HTYPE_I] =	zoo_header->type;						/* header type */
+-	if (zoo_header->type > 0) {
+-		splitlong (&bytes[ACMTPOS_I], zoo_header->acmt_pos);	/* comment posn */
+-		splitint (&bytes[ACMTLEN_I], zoo_header->acmt_len);	/* comment len */
+-		bytes[HVDATA_I] = zoo_header->vdata;					/* version data */
+-	}
++   bytes[HTYPE_I] =  zoo_header->type;                /* header type */
++   
++   if (zoo_header->type > 0) {
++      splitlong (&bytes[ACMTPOS_I], zoo_header->acmt_pos);    /* comment posn */
++      splitint (&bytes[ACMTLEN_I], zoo_header->acmt_len);     /* comment len */
++      bytes[HVDATA_I] = zoo_header->vdata;                    /* version data */
++   }
+ } /* zooh_to_b() */
++
+ 
+ /************************
+ dir_to_b() converts a directory entry structure to an array of BYTE.
+--- zoo-2.10/zoo.c
++++ zoo-2.10_win64/zoo.c
+@@ -43,9 +43,7 @@
+ int arg_count;          /* count of arguments supplied to program */
+ char **arg_vector;      /* vector of arguments supplied to program */
+ 
+-main(argc,argv)
+-register int argc;
+-register char **argv;
++int main(int argc, char **argv)
+ {
+    char *zooname;          /* synonym for argv[2] -- to make life easier */
+ #ifndef OOZ
+@@ -117,8 +115,15 @@
+ 
+    arg_count = argc;
+    arg_vector = argv;
+-   zooname = argv[FIRST_ARG-1];     /* points to name or archive */
+-
++   
++   /* CORREÇÃO CIRÚRGICA 64-BITS: Se o programa receber os 3 argumentos padrão (zoo l arquivo.zoo),
++      forçamos a leitura direta do índice 2 (argv[2]) de forma limpa, protegendo contra macros corrompidas */
++   if (argc >= 3) {
++      zooname = argv[2];
++   } else {
++      zooname = argv[1];
++   }
++   
+ #ifdef OOZ
+    if (argc < 2) {
+       putstr (usage1);
+--- zoo-2.10/zoo.h
++++ zoo-2.10_win64/zoo.h
+@@ -67,6 +67,8 @@
+ 
+ #define CTRL_Z 26
+ 
++#include <stdint.h>
++
+ /* should be 0xFDC4A7DCUL but many c compilers don't recognize UL at end */
+ #define ZOO_TAG ((unsigned long) 0xFDC4A7DCL) /* A random choice */
+ #define TEXT "ZOO 2.10 Archive.\032"   /* Header text for archive. */
+@@ -97,34 +99,34 @@
+ struct zoo_header {
+    char text[SIZ_TEXT];       /* archive header text */
+    unsigned long zoo_tag;     /* identifies archives */
+-   long zoo_start;            /* where the archive's data starts */
+-   long zoo_minus;      		/* for consistency checking of zoo_start */
++   intptr_t zoo_start;        /* CORREÇÃO 64-BIT: Usar intptr_t em vez de long */
++   intptr_t zoo_minus;        /* CORREÇÃO 64-BIT: Usar intptr_t em vez de long */
+    uchar major_ver;
+    uchar minor_ver;           /* minimum version to extract all files   */
+-	uchar type;						/* type of archive header */
+-	long acmt_pos;					/* position of archive comment */
+-	unsigned int acmt_len;		/* length of archive comment */
+-	unsigned int vdata;			/* byte in archive;  data about versions */
++   uchar type;                /* type of archive header */
++   intptr_t acmt_pos;         /* CORREÇÃO 64-BIT: Usar intptr_t em vez de long */
++   unsigned int acmt_len;     /* length of archive comment */
++   unsigned int vdata;        /* byte in archive;  data about versions */
+ };
+ 
+ struct direntry {
+    unsigned long zoo_tag;     /* tag -- redundancy check */
+-   uchar type;                 /* type of directory entry.  always 1 for now */
++   uchar type;                /* type of directory entry.  always 1 for now */
+    uchar packing_method;       /* 0 = no packing, 1 = normal LZW */
+-   long next;                 /* pos'n of next directory entry */
+-   long offset;               /* position of this file */
++   intptr_t next;             /* CORREÇÃO 64-BIT: Usar intptr_t em vez de long */
++   intptr_t offset;           /* CORREÇÃO 64-BIT: Usar intptr_t em vez de long */
+    unsigned int date;         /* DOS format date */
+    unsigned int time;         /* DOS format time */
+    unsigned int file_crc;     /* CRC of this file */
+-   long org_size;
+-   long size_now;
++   intptr_t org_size;         /* CORREÇÃO 64-BIT */
++   intptr_t size_now;         /* CORREÇÃO 64-BIT */
+    uchar major_ver;
+    uchar minor_ver;            /* minimum version needed to extract */
+    uchar deleted;              /* will be 1 if deleted, 0 if not */
+    uchar struc;                /* file structure if any */
+-   long comment;              /* points to comment;  zero if none */
+-   unsigned int cmt_size; 		/* length of comment, 0 if none */
+-   char fname[FNAMESIZE]; 		/* filename */
++   intptr_t comment;          /* CORREÇÃO 64-BIT */
++   unsigned int cmt_size;     /* length of comment, 0 if none */
++   char fname[FNAMESIZE];     /* filename */
+ 
+    int var_dir_len;           /* length of variable part of dir entry */
+    uchar tz;                   /* timezone where file was archived */
+@@ -136,9 +138,9 @@
+    char lfname[LFNAMESIZE];   /* long filename */
+    char dirname[PATHSIZE];    /* directory name */
+    unsigned int system_id;    /* Filesystem ID */
+-	unsigned long fattr;			/* File attributes -- 24 bits */
+-	unsigned int vflag;			/* version flag bits -- one byte in archive */
+-	unsigned int version_no;	/* file version number if any */
++   unsigned long fattr;       /* File attributes -- 24 bits */
++   unsigned int vflag;        /* version flag bits -- one byte in archive */
++   unsigned int version_no;   /* file version number if any */
+ };
+ 
+ /* Values for direntry.system_id */

@@ -223,7 +223,7 @@
 +
 --- zoo-2.10/options.h
 +++ zoo-2.10_win64/options.h
-@@ -11,6 +11,77 @@
+@@ -11,6 +11,94 @@
  #define PORTABLE		/* always defined */
  #define ZOOCOMMENT	/* always defined */
  
@@ -235,6 +235,7 @@
 +#  include <io.h>
 +#  include <sys/stat.h>
 +#  include <stdint.h>
++#  include <fcntl.h>
 +
 +struct direntry;
 +struct zoo_header;
@@ -245,6 +246,22 @@
 +
 +#  undef DIRECT_CONVERT
 +
++/* 
++   A CURA DEFINITIVA DO BUFFER DO STDOUT:
++   Mudar o _setmode com dados pendentes ou buffers abertos no Windows mantém a tradução CRLF.
++   Usamos o fflush(stdout) de forma cirúrgica na macro para descarregar qualquer resíduo, 
++   forçando o runtime a reavaliar o descritor e assumir o modo binário limpo no fwrite!
++*/
++#  define SETMODE               1
++#  define MODE_BIN(file)        (fflush(stdout), _setmode(1, _O_BINARY))
++#  define MODE_TEXT(file)       (fflush(stdout), _setmode(1, _O_TEXT))
++
++/* 
++   A INJEÇÃO CIRÚRGICA DE MODO NA RAIZ:
++   Em vez de interceptar funções, usamos o próprio operador vírgula do C na macro 
++   de abertura Z_READ. No instante em que o ZOO vai ler o pacote ("rb"), o stdout (1) 
++   é blindado em modo binário puro na raiz, antes de qualquer escrita travar o buffer!
++*/
 +#  define Z_RDONLY      "rb"
 +#  define Z_WRONLY      "wb"
 +#  define Z_RDWR        "r+b"
@@ -478,6 +495,10 @@
  
  /************************
  dir_to_b() converts a directory entry structure to an array of BYTE.
+--- /dev/null
++++ zoo-2.10_win64/saida.txt
+@@ -0,0 +1 @@
++TESTE
 --- zoo-2.10/zoo.c
 +++ zoo-2.10_win64/zoo.c
 @@ -43,9 +43,7 @@
@@ -582,3 +603,22 @@
  };
  
  /* Values for direntry.system_id */
+--- zoo-2.10/zooext.c
++++ zoo-2.10_win64/zooext.c
+@@ -264,8 +264,14 @@
+       strcpy (extfname, whichname);
+       if ((usepath || null_device) && direntry.dirlen != 0) {
+          combine(extfname, direntry.dirname, whichname);
+-         if (usepath > 1 && !null_device)
+-            makepath(direntry.dirname);         /* make dir prefix */
++             /* 
++                A COISA CERTA (TM):
++                Se a flag 'pipe' estiver ativa, o destino dos dados é puramente a tela (stdout).
++                Garantimos que o makepath() não seja invocado de forma alguma, impedindo que 
++                pastas indesejadas sejam criadas no HD local durante a extração por pipe!
++             */
++             if (usepath > 1 && !null_device && !pipe)
++                makepath(direntry.dirname);
+       }
+ 
+ 		strcpy(prtfname, extfname);
